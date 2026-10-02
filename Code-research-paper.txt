@@ -1,0 +1,75 @@
+import time
+import numpy as np
+import cv2
+import torch
+import torch_directml
+
+# GPU Device Setup
+device = torch_directml.device()
+
+print("\n==================================================")
+print("   REAL-TIME IMAGE PROCESSING BENCHMARK")
+print("==================================================")
+print(f"GPU: AMD Radeon RX 590 (DirectML)")
+print(f"CPU: AMD Ryzen 5 5600\n")
+
+# 1. Create a Synthetic High-Res (4K) RGB Image (3840 x 2160 pixels)
+height, width = 2160, 3840
+print(f"Generating 4K Image Tensor ({width}x{height} pixels)...")
+raw_image = np.random.randint(0, 256, (height, width, 3), dtype=np.uint8)
+
+# Convert to Float32 for Filter Processing
+img_float = raw_image.astype(np.float32) / 255.0
+
+# Define a 5x5 Gaussian Blur Kernel
+kernel_np = np.array([
+    [1,  4,  6,  4, 1],
+    [4, 16, 24, 16, 4],
+    [6, 24, 36, 24, 6],
+    [4, 16, 24, 16, 4],
+    [1,  4,  6,  4, 1]
+], dtype=np.float32) / 256.0
+
+# --- CPU IMAGE PROCESSING (OpenCV) ---
+print("Running CPU Processing (OpenCV Gaussian Filter)...")
+start_cpu = time.time()
+# Repeat 50 times to simulate video frame processing
+for _ in range(50):
+    cpu_processed = cv2.filter2D(img_float, -1, kernel_np)
+end_cpu = time.time()
+cpu_time = end_cpu - start_cpu
+
+# --- GPU IMAGE PROCESSING (PyTorch 2D Convolution) ---
+print("Running GPU Processing (DirectML 2D Tensor Convolution)...")
+# Prepare PyTorch Tensors (Batch, Channel, Height, Width)
+img_tensor = torch.tensor(img_float, device=device).permute(2, 0, 1).unsqueeze(0)
+kernel_tensor = torch.tensor(kernel_np, device=device).unsqueeze(0).unsqueeze(0).repeat(3, 1, 1, 1)
+
+# Warmup GPU execution pipelines
+_ = torch.nn.functional.conv2d(img_tensor, kernel_tensor, padding=2, groups=3)
+_ = img_tensor[0, 0, 0, 0].item() # Clear queue
+
+start_gpu = time.time()
+for _ in range(50):
+    gpu_processed = torch.nn.functional.conv2d(img_tensor, kernel_tensor, padding=2, groups=3)
+
+# Force GPU to synchronize and finish all remaining frames before stopping timer
+_ = gpu_processed[0, 0, 0, 0].item()
+end_gpu = time.time()
+gpu_time = end_gpu - start_gpu
+
+# --- RESULTS ANALYSIS ---
+print("\n==================================================")
+print(f"Workload: 50 Frames of 4K Image Filtering")
+print(f"CPU Time (OpenCV): {cpu_time:.4f} seconds")
+print(f"GPU Time (DirectML): {gpu_time:.4f} seconds")
+
+# Dynamic Winner Check
+if cpu_time < gpu_time:
+    ratio = gpu_time / cpu_time
+    print(f"Result: {ratio:.2f}x Faster on CPU!")
+else:
+    ratio = cpu_time / gpu_time
+    print(f"Result: {ratio:.2f}x Faster on GPU!")
+
+print("==================================================\n")
